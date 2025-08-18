@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gen2brain/beeep"
 )
 
 type appState int
@@ -28,6 +29,7 @@ type model struct {
 	quitting  bool
 	timeout   time.Duration
 	err       string
+	notifIcon []byte
 }
 
 type keymap struct {
@@ -63,6 +65,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case timer.TimeoutMsg:
+		_ = beeep.Alert("hourglass", "Time is up!!", m.notifIcon)
+
 		m.quitting = true
 		return m, tea.Quit
 
@@ -148,6 +152,8 @@ func (m model) View() string {
 }
 
 func main() {
+	beeep.AppName = "hourglass"
+
 	// Initialize text input for duration entry
 	ti := textinput.New()
 	ti.Placeholder = "5m"
