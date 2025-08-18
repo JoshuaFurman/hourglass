@@ -7,17 +7,27 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const timeout = time.Second * 5
+type appState int
+
+const (
+	inputState appState = iota
+	timerState
+)
 
 type model struct {
-	timer    timer.Model
-	keymap   keymap
-	help     help.Model
-	quitting bool
+	state     appState
+	textInput textinput.Model
+	timer     timer.Model
+	keymap    keymap
+	help      help.Model
+	quitting  bool
+	timeout   time.Duration
+	err       string
 }
 
 type keymap struct {
@@ -28,22 +38,29 @@ type keymap struct {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.state == inputState {
+		return textinput.Blink
+	}
 	return m.timer.Init()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case timer.TickMsg:
-		var cmd tea.Cmd
-		m.timer, cmd = m.timer.Update(msg)
-		return m, cmd
+		if m.state == timerState {
+			var cmd tea.Cmd
+			m.timer, cmd = m.timer.Update(msg)
+			return m, cmd
+		}
 
 	case timer.StartStopMsg:
-		var cmd tea.Cmd
-		m.timer, cmd = m.timer.Update(msg)
-		m.keymap.stop.SetEnabled(m.timer.Running())
-		m.keymap.start.SetEnabled(!m.timer.Running())
-		return m, cmd
+		if m.state == timerState {
+			var cmd tea.Cmd
+			m.timer, cmd = m.timer.Update(msg)
+			m.keymap.stop.SetEnabled(m.timer.Running())
+			m.keymap.start.SetEnabled(!m.timer.Running())
+			return m, cmd
+		}
 
 	case timer.TimeoutMsg:
 		m.quitting = true
@@ -54,10 +71,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.quit):
 			m.quitting = true
 			return m, tea.Quit
-		case key.Matches(msg, m.keymap.reset):
-			m.timer.Timeout = timeout
-		case key.Matches(msg, m.keymap.start, m.keymap.stop):
-			return m, m.timer.Toggle()
+		}
+
+		switch m.state {
+		case inputState:
+			switch msg.String() {
+			case "enter":
+				// Parse the duration from text input
+				duration, err := time.ParseDuration(m.textInput.Value())
+				if err != nil {
+					m.err = "Invalid duration format. Use formats like '5m', '30s', '1h30m'"
+					return m, nil
+				}
+				if duration <= 0 {
+					m.err = "Duration must be greater than 0"
+					return m, nil
+				}
+
+				// Set the timeout and switch to timer state
+				m.timeout = duration
+				m.timer = timer.NewWithInterval(duration, time.Millisecond)
+				m.state = timerState
+				m.err = ""
+				return m, m.timer.Init()
+			default:
+				var cmd tea.Cmd
+				m.textInput, cmd = m.textInput.Update(msg)
+				return m, cmd
+			}
+		case timerState:
+			switch {
+			case key.Matches(msg, m.keymap.reset):
+				m.timer.Timeout = m.timeout
+			case key.Matches(msg, m.keymap.start, m.keymap.stop):
+				return m, m.timer.Toggle()
+			}
 		}
 	}
 
@@ -74,6 +122,17 @@ func (m model) helpView() string {
 }
 
 func (m model) View() string {
+	if m.state == inputState {
+		s := "Enter timer duration (e.g., 5m, 30s, 1h30m):\n\n"
+		s += m.textInput.View() + "\n"
+		if m.err != "" {
+			s += "\nError: " + m.err + "\n"
+		}
+		s += "\nPress Enter to start timer, q to quit"
+		return s
+	}
+
+	// Timer state view
 	s := m.timer.View()
 
 	if m.timer.Timedout() {
@@ -82,15 +141,23 @@ func (m model) View() string {
 	s += "\n"
 
 	if !m.quitting {
-		s = "Exiting in " + s
+		s = "Timer: " + s
 		s += m.helpView()
 	}
 	return s
 }
 
 func main() {
+	// Initialize text input for duration entry
+	ti := textinput.New()
+	ti.Placeholder = "5m"
+	ti.Focus()
+	ti.CharLimit = 20
+	ti.Width = 20
+
 	m := model{
-		timer: timer.NewWithInterval(timeout, time.Millisecond),
+		state:     inputState,
+		textInput: ti,
 		keymap: keymap{
 			start: key.NewBinding(
 				key.WithKeys("s"),
