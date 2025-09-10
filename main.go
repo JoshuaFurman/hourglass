@@ -67,21 +67,23 @@ const (
 	landingState appState = iota
 	inputState
 	timerState
+	completionState
 )
 
 type model struct {
-	state     appState
-	textInput textinput.Model
-	timer     timer.Model
-	keymap    keymap
-	help      help.Model
-	quitting  bool
-	timeout   time.Duration
-	err       string
-	notifIcon []byte
-	menuIndex int
-	width     int
-	height    int
+	state           appState
+	textInput       textinput.Model
+	timer           timer.Model
+	keymap          keymap
+	help            help.Model
+	quitting        bool
+	timeout         time.Duration
+	err             string
+	notifIcon       []byte
+	menuIndex       int
+	width           int
+	height          int
+	completionIndex int // For completion screen menu
 }
 
 type keymap struct {
@@ -128,8 +130,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case timer.TimeoutMsg:
 		_ = beeep.Alert("hourglass", "Time is up!!", m.notifIcon)
 
-		m.quitting = true
-		return m, tea.Quit
+		// Transition to completion state instead of quitting
+		m.state = completionState
+		m.completionIndex = 0 // Default to "Restart Timer"
+		return m, nil
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -151,6 +155,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 1: // Quit
 					m.quitting = true
 					return m, tea.Quit
+				}
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, nil
+
+		case completionState:
+			switch msg.String() {
+			case "up", "k":
+				if m.completionIndex > 0 {
+					m.completionIndex--
+				}
+			case "down", "j":
+				if m.completionIndex < 1 {
+					m.completionIndex++
+				}
+			case "enter":
+				switch m.completionIndex {
+				case 0: // Restart Timer
+					m.timer = timer.NewWithInterval(m.timeout, time.Millisecond)
+					m.state = timerState
+					return m, m.timer.Init()
+				case 1: // Return to Menu
+					m.state = landingState
+					m.menuIndex = 0
+					return m, nil
 				}
 			case "q", "ctrl+c":
 				m.quitting = true
@@ -221,6 +252,8 @@ func (m model) View() string {
 		return m.renderInputPage()
 	case timerState:
 		return m.renderTimerPage()
+	case completionState:
+		return m.renderCompletionPage()
 	}
 	return ""
 }
@@ -309,6 +342,48 @@ func (m model) renderTimerPage() string {
 		m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
 		content.String(),
+	)
+}
+
+func (m model) renderCompletionPage() string {
+	// Completion message
+	completionMsg := lipgloss.NewStyle().
+		Align(lipgloss.Center).
+		Bold(true).
+		Foreground(lipgloss.Color("#00FF00")).
+		Render("🎉 Timer Complete! 🎉")
+
+	// Menu options
+	menuItems := []string{"Restart Timer for: " + m.textInput.Value(), "Return to Menu"}
+	var menuLines []string
+
+	for i, item := range menuItems {
+		if i == m.completionIndex {
+			menuLines = append(menuLines, selectedMenuItemStyle.Render("> "+item))
+		} else {
+			menuLines = append(menuLines, menuItemStyle.Render("  "+item))
+		}
+	}
+
+	menu := menuStyle.Render(strings.Join(menuLines, "\n"))
+
+	// Instructions
+	instructions := instructionsStyle.Render("Use ↑/↓ or j/k to navigate, Enter to select, q to quit")
+
+	// Combine all elements
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		completionMsg,
+		"\n\n",
+		menu,
+		"\n",
+		instructions,
+	)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
 	)
 }
 
