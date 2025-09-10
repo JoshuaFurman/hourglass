@@ -13,10 +13,20 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
+const hourglassASCII = `
+██╗  ██╗ ██████╗ ██╗   ██╗██████╗  ██████╗ ██╗      █████╗ ███████╗███████╗
+██║  ██║██╔═══██╗██║   ██║██╔══██╗██╔════╝ ██║     ██╔══██╗██╔════╝██╔════╝
+███████║██║   ██║██║   ██║██████╔╝██║  ███╗██║     ███████║███████╗███████╗
+██╔══██║██║   ██║██║   ██║██╔══██╗██║   ██║██║     ██╔══██║╚════██║╚════██║
+██║  ██║╚██████╔╝╚██████╔╝██║  ██║╚██████╔╝███████╗██║  ██║███████║███████║
+╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝
+`
+
 type appState int
 
 const (
-	inputState appState = iota
+	landingState appState = iota
+	inputState
 	timerState
 )
 
@@ -30,6 +40,7 @@ type model struct {
 	timeout   time.Duration
 	err       string
 	notifIcon []byte
+	menuIndex int
 }
 
 type keymap struct {
@@ -40,10 +51,14 @@ type keymap struct {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.state == inputState {
+	switch m.state {
+	case landingState:
+		return nil
+	case inputState:
 		return textinput.Blink
+	default:
+		return m.timer.Init()
 	}
-	return m.timer.Init()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -71,6 +86,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
+		switch m.state {
+		case landingState:
+			switch msg.String() {
+			case "up", "k":
+				if m.menuIndex > 0 {
+					m.menuIndex--
+				}
+			case "down", "j":
+				if m.menuIndex < 1 {
+					m.menuIndex++
+				}
+			case "enter":
+				switch m.menuIndex {
+				case 0: // Start Timer
+					m.state = inputState
+					return m, textinput.Blink
+				case 1: // Quit
+					m.quitting = true
+					return m, tea.Quit
+				}
+			case "q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, m.keymap.quit):
 			m.quitting = true
@@ -126,7 +168,21 @@ func (m model) helpView() string {
 }
 
 func (m model) View() string {
-	if m.state == inputState {
+	switch m.state {
+	case landingState:
+		menuItems := []string{"Start Timer", "Quit"}
+		var menu string
+		for i, item := range menuItems {
+			cursor := "  "
+			if i == m.menuIndex {
+				cursor = "> "
+			}
+			menu += cursor + item + "\n"
+		}
+
+		return hourglassASCII + "\n\n" + menu + "\nUse ↑/↓ or j/k to navigate, Enter to select, q to quit"
+
+	case inputState:
 		s := "Enter timer duration (e.g., 5m, 30s, 1h30m):\n\n"
 		s += m.textInput.View() + "\n"
 		if m.err != "" {
@@ -134,21 +190,23 @@ func (m model) View() string {
 		}
 		s += "\nPress Enter to start timer, q to quit"
 		return s
+
+	case timerState:
+		s := m.timer.View()
+
+		if m.timer.Timedout() {
+			s = "All done!!"
+		}
+		s += "\n"
+
+		if !m.quitting {
+			s = "Timer: " + s
+			s += m.helpView()
+		}
+		return s
 	}
 
-	// Timer state view
-	s := m.timer.View()
-
-	if m.timer.Timedout() {
-		s = "All done!!"
-	}
-	s += "\n"
-
-	if !m.quitting {
-		s = "Timer: " + s
-		s += m.helpView()
-	}
-	return s
+	return ""
 }
 
 func main() {
@@ -162,7 +220,7 @@ func main() {
 	ti.Width = 20
 
 	m := model{
-		state:     inputState,
+		state:     landingState,
 		textInput: ti,
 		keymap: keymap{
 			start: key.NewBinding(
