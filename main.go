@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -10,7 +11,45 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gen2brain/beeep"
+)
+
+var (
+	centeredStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center)
+
+	asciiStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Bold(true).
+			Foreground(lipgloss.Color("#FFD700")) // Gold color
+
+	menuStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Padding(1, 2)
+
+	menuItemStyle = lipgloss.NewStyle().
+			Padding(0, 1)
+
+	selectedMenuItemStyle = lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(lipgloss.Color("#00FF00")) // Green for selected
+
+	instructionsStyle = lipgloss.NewStyle().
+				Align(lipgloss.Center).
+				Faint(true)
+
+	inputStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Padding(2, 0)
+
+	timerStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Bold(true)
+
+	errorStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("#FF0000")) // Red for errors
 )
 
 const hourglassASCII = `
@@ -41,6 +80,8 @@ type model struct {
 	err       string
 	notifIcon []byte
 	menuIndex int
+	width     int
+	height    int
 }
 
 type keymap struct {
@@ -63,6 +104,11 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case timer.TickMsg:
 		if m.state == timerState {
 			var cmd tea.Cmd
@@ -170,43 +216,100 @@ func (m model) helpView() string {
 func (m model) View() string {
 	switch m.state {
 	case landingState:
-		menuItems := []string{"Start Timer", "Quit"}
-		var menu string
-		for i, item := range menuItems {
-			cursor := "  "
-			if i == m.menuIndex {
-				cursor = "> "
-			}
-			menu += cursor + item + "\n"
-		}
-
-		return hourglassASCII + "\n\n" + menu + "\nUse ↑/↓ or j/k to navigate, Enter to select, q to quit"
-
+		return m.renderLandingPage()
 	case inputState:
-		s := "Enter timer duration (e.g., 5m, 30s, 1h30m):\n\n"
-		s += m.textInput.View() + "\n"
-		if m.err != "" {
-			s += "\nError: " + m.err + "\n"
-		}
-		s += "\nPress Enter to start timer, q to quit"
-		return s
-
+		return m.renderInputPage()
 	case timerState:
-		s := m.timer.View()
+		return m.renderTimerPage()
+	}
+	return ""
+}
 
-		if m.timer.Timedout() {
-			s = "All done!!"
-		}
-		s += "\n"
+func (m model) renderLandingPage() string {
+	// ASCII art centered
+	ascii := asciiStyle.Render(hourglassASCII)
 
-		if !m.quitting {
-			s = "Timer: " + s
-			s += m.helpView()
+	// Menu centered
+	menu := m.renderMenu()
+
+	// Instructions centered
+	instructions := instructionsStyle.Render("Use ↑/↓ or j/k to navigate, Enter to select, q to quit")
+
+	// Combine with vertical centering
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		ascii,
+		"\n\n",
+		menu,
+		"\n",
+		instructions,
+	)
+
+	// Place content in center of screen
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+func (m model) renderMenu() string {
+	menuItems := []string{"Start Timer", "Quit"}
+	var menuLines []string
+
+	for i, item := range menuItems {
+		if i == m.menuIndex {
+			menuLines = append(menuLines, selectedMenuItemStyle.Render("> "+item))
+		} else {
+			menuLines = append(menuLines, menuItemStyle.Render("  "+item))
 		}
-		return s
 	}
 
-	return ""
+	return menuStyle.Render(strings.Join(menuLines, "\n"))
+}
+
+func (m model) renderInputPage() string {
+	var content strings.Builder
+
+	content.WriteString("Enter timer duration (e.g., 5m, 30s, 1h30m):\n\n")
+	content.WriteString(m.textInput.View())
+	content.WriteString("\n")
+
+	if m.err != "" {
+		content.WriteString("\n")
+		content.WriteString(errorStyle.Render("Error: " + m.err))
+		content.WriteString("\n")
+	}
+
+	content.WriteString("\nPress Enter to start timer, q to quit")
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		inputStyle.Render(content.String()),
+	)
+}
+
+func (m model) renderTimerPage() string {
+	var content strings.Builder
+
+	timerDisplay := m.timer.View()
+	if m.timer.Timedout() {
+		timerDisplay = "All done!!"
+	}
+
+	content.WriteString(timerStyle.Render("Timer: " + timerDisplay))
+	content.WriteString("\n")
+
+	if !m.quitting {
+		content.WriteString(m.helpView())
+	}
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content.String(),
+	)
 }
 
 func main() {
@@ -244,7 +347,8 @@ func main() {
 	}
 	m.keymap.start.SetEnabled(false)
 
-	if _, err := tea.NewProgram(m).Run(); err != nil {
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
 		fmt.Println("uh oh, we encountered an issue:", err)
 		os.Exit(1)
 	}
